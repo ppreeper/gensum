@@ -1,3 +1,7 @@
 module github.com/ppreeper/gensum
 
-go 1.19
+go 1.18
+
+require golang.org/x/crypto v0.5.0
+
+require golang.org/x/sys v0.4.0 // indirect

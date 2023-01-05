@@ -8,6 +8,14 @@
 # Test binary, built with `go test -c`
 *.test
 
+# hashsums
+*.b2sum
+*.md5sum
+*.sha1sum
+*.sha224sum
+*.sha256sum
+*.sha512sum
+
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
