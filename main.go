@@ -84,7 +84,7 @@ func WalkAllFilesInDir(dir string, algo string) error {
 		}
 		// check if it is a regular file (not dir)
 		if !d.IsDir() {
-			fmt.Printf("%s %s\n", calcsum(path, algo), path)
+			fmt.Printf("%s  %s\n", calcsum(path, algo), path)
 		}
 		return nil
 	})
