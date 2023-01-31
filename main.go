@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -19,26 +20,35 @@ import (
 	"golang.org/x/crypto/blake2b"
 )
 
+type CheckParams struct {
+	sumfile  string
+	quiet    bool
+	imissing bool
+}
+
 func main() {
-	var checkSums, algo string
+	var algo string
+	var chkparams = CheckParams{}
 	flag.StringVar(&algo, "d", "MD5", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2")
-	flag.StringVar(&checkSums, "c", "", "read sums from the FILEs and check them")
+	flag.StringVar(&chkparams.sumfile, "c", "", "read sums from the FILEs and check them")
+	flag.BoolVar(&chkparams.quiet, "quiet", false, "don't print OK for each successfully verified file")
+	flag.BoolVar(&chkparams.imissing, "ignore-missing", false, "don't fail or report status for missing files")
 	flag.Parse()
 	args := flag.Args()
 	algo = strings.ToUpper(algo)
 	// fmt.Println(args)
 
-	if checkSums != "" {
-		compareSums()
+	if !contains([]string{"BLAKE2", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512"}, algo) {
+		fmt.Println("invalid hash algorithm")
+		os.Exit(0)
+	}
+
+	if chkparams.sumfile != "" && algo != "" {
+		chkparams.compareSums(algo)
 		os.Exit(0)
 	}
 
 	if len(args) == 0 {
-		os.Exit(0)
-	}
-
-	if !contains([]string{"BLAKE2", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512"}, algo) {
-		fmt.Println("invalid hash algorithm")
 		os.Exit(0)
 	}
 
@@ -56,25 +66,50 @@ func contains[K comparable](s []K, e K) bool {
 	return false
 }
 
-func compareSums() {
-	fmt.Println("compareSums")
+func (c *CheckParams) compareSums(algo string) {
+	file, err := os.Open(c.sumfile)
+	if err != nil {
+		fmt.Println("error opening sum file")
+		return
+	}
+	defer file.Close()
 
-	// > b2sum -c check_ver.b2sum
-	// go.mod: OK
-	// go.sum: OK
-	// LICENSE: OK
-	// main.go: OK
-	// README.md: OK
+	failCount := 0
+	failRead := 0
 
-	// > b2sum -c check_ver.b2sum
-	// check.b2sum: OK
-	// check_ver.b2sum: FAILED
-	// go.mod: OK
-	// go.sum: OK
-	// LICENSE: OK
-	// main.go: OK
-	// README.md: OK
-	// b2sum: WARNING: 1 computed checksum did NOT match
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		hashPath := strings.Split(line, "  ")
+		path := strings.Join(hashPath[1:], "  ")
+		hash := calcsum(path, algo)
+
+		if hashPath[0] == hash {
+			if !c.quiet {
+				fmt.Printf("%s: OK\n", path)
+			}
+		} else {
+			errMessage := ""
+			if hash == "" {
+				errMessage = " open or read"
+				failRead++
+			}
+			if hash == "" {
+				if !c.imissing {
+					fmt.Printf("%s: FAILED%s\n", path, errMessage)
+				}
+			} else {
+				fmt.Printf("%s: FAILED\n", path)
+			}
+			failCount++
+		}
+	}
+	if failRead > 0 && !c.imissing {
+		fmt.Println("gensum: WARNING:", failRead, "listed file could not be read")
+	}
+	if failCount > 0 {
+		fmt.Println("gensum: WARNING:", failCount, "computed checksums did NOT match")
+	}
 }
 
 func WalkAllFilesInDir(dir string, algo string) error {
@@ -93,7 +128,7 @@ func WalkAllFilesInDir(dir string, algo string) error {
 func calcsum(path string, algo string) (encodedHex string) {
 	f, err := os.Open(path)
 	if err != nil {
-		log.Fatal(err)
+		return encodedHex
 	}
 	defer f.Close()
 
