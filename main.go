@@ -29,10 +29,20 @@ type CheckParams struct {
 func main() {
 	var algo string
 	var chkparams = CheckParams{}
-	flag.StringVar(&algo, "d", "MD5", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2")
+	flag.StringVar(&algo, "d", "SHA256", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2")
 	flag.StringVar(&chkparams.sumfile, "c", "", "read sums from the FILEs and check them")
-	flag.BoolVar(&chkparams.quiet, "quiet", false, "don't print OK for each successfully verified file")
-	flag.BoolVar(&chkparams.imissing, "ignore-missing", false, "don't fail or report status for missing files")
+	flag.BoolVar(
+		&chkparams.quiet,
+		"quiet",
+		false,
+		"don't print OK for each successfully verified file",
+	)
+	flag.BoolVar(
+		&chkparams.imissing,
+		"ignore-missing",
+		false,
+		"don't fail or report status for missing files",
+	)
 	flag.Parse()
 	args := flag.Args()
 	algo = strings.ToUpper(algo)
