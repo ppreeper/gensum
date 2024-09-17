@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/zeebo/blake3"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -28,8 +29,8 @@ type CheckParams struct {
 
 func main() {
 	var algo string
-	var chkparams = CheckParams{}
-	flag.StringVar(&algo, "d", "SHA256", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2")
+	chkparams := CheckParams{}
+	flag.StringVar(&algo, "d", "SHA256", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2, BLAKE3")
 	flag.StringVar(&chkparams.sumfile, "c", "", "read sums from the FILEs and check them")
 	flag.BoolVar(
 		&chkparams.quiet,
@@ -48,7 +49,7 @@ func main() {
 	algo = strings.ToUpper(algo)
 	// fmt.Println(args)
 
-	if !contains([]string{"BLAKE2", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512"}, algo) {
+	if !contains([]string{"BLAKE2", "BLAKE3", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512"}, algo) {
 		fmt.Println("invalid hash algorithm")
 		os.Exit(0)
 	}
@@ -163,6 +164,8 @@ func calcsum(path string, algo string) (encodedHex string) {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+	case "BLAKE3":
+		hasher = blake3.New()
 	default:
 		hasher = md5.New()
 	}
