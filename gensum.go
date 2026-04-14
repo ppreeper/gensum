@@ -12,16 +12,20 @@ import (
 	"hash"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/zeebo/blake3"
 	"golang.org/x/crypto/blake2b"
 )
 
-type CheckParams struct {
+var supportedAlgorithms = []string{
+	"BLAKE2", "BLAKE3", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512",
+}
+
+type checkParams struct {
 	sumfile  string
 	quiet    bool
 	imissing bool
@@ -29,7 +33,7 @@ type CheckParams struct {
 
 func main() {
 	var algo string
-	chkparams := CheckParams{}
+	chkparams := checkParams{}
 	flag.StringVar(&algo, "d", "SHA256", "MD5, SHA1, SHA224, SHA256, SHA384, SHA512, BLAKE2, BLAKE3")
 	flag.StringVar(&chkparams.sumfile, "c", "", "read sums from the FILEs and check them")
 	flag.BoolVar(
@@ -47,41 +51,33 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 	algo = strings.ToUpper(algo)
-	// fmt.Println(args)
 
-	if !contains([]string{"BLAKE2", "BLAKE3", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512"}, algo) {
-		fmt.Println("invalid hash algorithm")
-		os.Exit(0)
+	if !slices.Contains(supportedAlgorithms, algo) {
+		fmt.Fprintln(os.Stderr, "invalid hash algorithm")
+		os.Exit(1)
 	}
 
-	if chkparams.sumfile != "" && algo != "" {
+	if chkparams.sumfile != "" {
 		chkparams.compareSums(algo)
-		os.Exit(0)
+		return
 	}
 
 	if len(args) == 0 {
-		os.Exit(0)
+		return
 	}
 
 	for _, file := range args {
-		WalkAllFilesInDir(file, algo)
-	}
-}
-
-func contains[K comparable](s []K, e K) bool {
-	for _, a := range s {
-		if a == e {
-			return true
+		if err := walkAllFilesInDir(file, algo); err != nil {
+			fmt.Fprintf(os.Stderr, "gensum: %s: %v\n", file, err)
 		}
 	}
-	return false
 }
 
-func (c *CheckParams) compareSums(algo string) {
+func (c *checkParams) compareSums(algo string) {
 	file, err := os.Open(c.sumfile)
 	if err != nil {
-		fmt.Println("error opening sum file")
-		return
+		fmt.Fprintf(os.Stderr, "gensum: %v\n", err)
+		os.Exit(1)
 	}
 	defer file.Close()
 
@@ -91,90 +87,107 @@ func (c *CheckParams) compareSums(algo string) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		hashPath := strings.Split(line, "  ")
-		path := strings.Join(hashPath[1:], "  ")
-		hash := calcsum(path, algo)
+		if line == "" {
+			continue
+		}
 
-		if hashPath[0] == hash {
+		hashPath := strings.SplitN(line, "  ", 2)
+		if len(hashPath) != 2 {
+			fmt.Fprintf(os.Stderr, "gensum: %s: improperly formatted checksum line\n", c.sumfile)
+			continue
+		}
+
+		expectedHash := hashPath[0]
+		path := hashPath[1]
+		actualHash, err := calcsum(path, algo)
+
+		if err != nil {
+			failRead++
+			failCount++
+			if !c.imissing {
+				fmt.Fprintf(os.Stderr, "gensum: %s: %v\n", path, err)
+				fmt.Printf("%s: FAILED open or read\n", path)
+			}
+			continue
+		}
+
+		if expectedHash == actualHash {
 			if !c.quiet {
 				fmt.Printf("%s: OK\n", path)
 			}
 		} else {
-			errMessage := ""
-			if hash == "" {
-				errMessage = " open or read"
-				failRead++
-			}
-			if hash == "" {
-				if !c.imissing {
-					fmt.Printf("%s: FAILED%s\n", path, errMessage)
-				}
-			} else {
-				fmt.Printf("%s: FAILED\n", path)
-			}
+			fmt.Printf("%s: FAILED\n", path)
 			failCount++
 		}
 	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "gensum: error reading %s: %v\n", c.sumfile, err)
+	}
+
 	if failRead > 0 && !c.imissing {
-		fmt.Println("gensum: WARNING:", failRead, "listed file could not be read")
+		fmt.Fprintf(os.Stderr, "gensum: WARNING: %d listed file could not be read\n", failRead)
 	}
 	if failCount > 0 {
-		fmt.Println("gensum: WARNING:", failCount, "computed checksums did NOT match")
+		fmt.Fprintf(os.Stderr, "gensum: WARNING: %d computed checksums did NOT match\n", failCount)
 	}
 }
 
-func WalkAllFilesInDir(dir string, algo string) error {
+func walkAllFilesInDir(dir string, algo string) error {
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// check if it is a regular file (not dir)
-		if !d.IsDir() {
-			fmt.Printf("%s  %s\n", calcsum(path, algo), path)
+		if d.IsDir() {
+			return nil
 		}
+		h, err := calcsum(path, algo)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		fmt.Printf("%s  %s\n", h, path)
 		return nil
 	})
 }
 
-func calcsum(path string, algo string) (encodedHex string) {
+func calcsum(path string, algo string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return encodedHex
+		return "", err
 	}
 	defer f.Close()
 
-	var hasher hash.Hash
-
-	switch algo {
-	case "MD5":
-		hasher = md5.New()
-	case "SHA1":
-		hasher = sha1.New()
-	case "SHA224":
-		hasher = sha256.New224()
-	case "SHA256":
-		hasher = sha256.New()
-	case "SHA384":
-		hasher = sha512.New384()
-	case "SHA512":
-		hasher = sha512.New()
-	case "BLAKE2":
-		hasher, err = blake2b.New512(nil)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-	case "BLAKE3":
-		hasher = blake3.New()
-	default:
-		hasher = md5.New()
+	hasher, err := newHasher(algo)
+	if err != nil {
+		return "", err
 	}
 
 	if _, err := io.Copy(hasher, f); err != nil {
-		log.Fatal(err)
+		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
-	hash := hasher.Sum(nil)
-	encodedHex = hex.EncodeToString(hash[:])
 
-	return
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func newHasher(algo string) (hash.Hash, error) {
+	switch algo {
+	case "MD5":
+		return md5.New(), nil
+	case "SHA1":
+		return sha1.New(), nil
+	case "SHA224":
+		return sha256.New224(), nil
+	case "SHA256":
+		return sha256.New(), nil
+	case "SHA384":
+		return sha512.New384(), nil
+	case "SHA512":
+		return sha512.New(), nil
+	case "BLAKE2":
+		return blake2b.New512(nil)
+	case "BLAKE3":
+		return blake3.New(), nil
+	default:
+		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
+	}
 }
